@@ -1,0 +1,207 @@
+# PokéCrypto Market — Bot specification
+
+**Archetype:** commerce
+
+**Voice:** professional and concise — write every user-facing message, button label, error, and empty state in this voice.
+
+A Telegram peer-to-peer marketplace for buying, selling and trading Pokémon trading cards settled with on-chain cryptocurrency. Users create listings with photos and condition, browse and filter listings, start orders that provide a one-time payment address, upload payment proof, and use an ephemeral buyer-seller chat per order. The bot routes admin notifications for high-value listings and disputes to the owner/admin and provides moderation tools and ratings to build trust. Funds flow on-chain (manual release/confirmation) — no built-in fiat or custodial fiat flows in initial scope.
+
+> This is the complete contract for the bot. Implement EVERY entry point, flow, feature, integration, and edge case below. The completeness review checks the bot against this document after each build pass.
+
+## Primary audience
+
+- Pokémon card collectors
+- TCG traders who accept crypto
+- Small sellers and hobbyists preferring on-chain settlement
+
+## Success criteria
+
+- Users can create listings with up to 6 photos and publish them (persisted and retrievable)
+- Buyers can create an order, receive a unique one-time payment address, and upload payment proof
+- Admin receives notifications for new high-value listings and disputes at ADMIN_CHAT_ID
+- Order lifecycle reaches final states (completed, cancelled, disputed) with ratings recorded
+- Per-order buyer-seller chat exists and supports reporting/moderation
+
+## Entry points
+
+Every feature must be reachable from the bot's command/button surface (button-first; only /start and /help are slash commands).
+
+- **/start** (command, actor: user, command: /start) — Open the main menu, show short rules, wallet guidance, and quick actions (Create listing, Browse, My orders, Help)
+  - outputs: Main menu message with inline buttons
+- **Create listing** (button, actor: user, callback: listing:create:start) — Open guided form to create a new listing (title, condition, qty, price+crypto, photos, description, shipping rules). Uses a step-by-step form with buttons for fixed choices and typed input for freeform fields.
+  - inputs: title (text), condition (choice), quantity (number), price (amount), crypto type (choice: BTC/ETH/USDC), photos (up to 6 images), description (text, optional), shipping rules (text, optional)
+  - outputs: Listing preview message with Confirm / Edit buttons, Published listing visible in marketplace feed
+- **Browse listings** (button, actor: user, callback: browse:start) — Open paginated feed of listings with filter buttons (condition, price range, crypto, location optional). Each listing card has View, Contact seller, Make offer, Buy now.
+  - inputs: filter selections via buttons (condition/crypto/price-range) or typed search
+  - outputs: Paginated list messages (cards) with inline navigation and action buttons
+- **/help** (command, actor: user, command: /help) — Show help topics and quick links to policies, dispute process, and contact admin.
+  - outputs: Help message with inline links/buttons
+- **My orders** (button, actor: user, callback: orders:my) — Show user's active and past orders; from an order view the user can open the per-order chat, upload payment proof, confirm shipment/receipt, or raise dispute.
+  - outputs: Order list, per-order detail views
+
+## Flows
+
+### Onboarding and profile creation
+_Trigger:_ /start
+
+1. Show short rules, wallet guidance and supported crypto list
+2. Offer Create profile button (optional): collect display name, location (optional), phone (optional, via ForceReply) and wallet guidance
+3. Persist profile and show main menu
+
+_Data touched:_ User
+
+### Create listing (guided)
+_Trigger:_ button listing:create:start
+
+1. Step 1: collect title (ForceReply)
+2. Step 2: select category/tags (buttons), select condition (buttons)
+3. Step 3: collect quantity and price + crypto type (ForceReply for amount, buttons for crypto)
+4. Step 4: upload photos (bot accepts up to 6 images, user can skip additional photos)
+5. Step 5: optional description and shipping rules (ForceReply)
+6. Preview generated listing card with Edit and Publish buttons
+7. On Publish: persist listing, send confirmation to seller, if price >= high-value threshold notify ADMIN_CHAT_ID
+
+_Data touched:_ Listing, Photo, User
+
+### Browse and search
+_Trigger:_ button browse:start or typed search
+
+1. Return paginated listing cards (10 per page) with inline pagination
+2. Filters applied via inline buttons; free-text search via slash command or ForceReply
+3. Select listing -> open detailed listing view with gallery, condition, price in crypto, action buttons (Contact seller, Make offer, Buy now)
+
+_Data touched:_ Listing
+
+### Buy now order creation
+_Trigger:_ callback Buy now on listing
+
+1. Create Order entity in 'awaiting_payment' state with one-time payment address generated by owner-backend or presented to buyer
+2. Show exact crypto amount + QR and a single-use payment address; include suggested network fee guidance
+3. Buyer uploads payment proof (tx hash or screenshot) using Upload button
+4. Bot notifies seller (in-app notification) with payment proof and request to verify
+5. Seller verifies on-chain / proof and marks 'paid' -> seller ships item and marks 'shipped'
+6. Buyer confirms receipt -> bot marks order 'completed' and prompts both parties for rating
+7. If dispute raised, send admin notification and mark order 'disputed'
+
+_Data touched:_ Order, PaymentProof, ChatThread, User, AdminReport
+
+### Per-order buyer-seller chat & moderation
+_Trigger:_ open chat from order view
+
+1. Open ephemeral chat thread linking buyer and seller; messages stored with timestamps
+2. Provide inline moderation options per message: Report, Block user
+3. Report triggers creation of AdminReport, sends notification to ADMIN_CHAT_ID with context and link to order/listing
+4. Admins can remove listing or ban user via owner controls
+
+_Data touched:_ ChatThread, AdminReport, User
+
+### Rating and reputation update
+_Trigger:_ order completed
+
+1. Prompt both buyer and seller with rating UI (1–5 stars + short note) via inline buttons or ForceReply for note
+2. Persist rating, update simple reputation score (average rating and review count)
+3. Expose reputation on user profile and listing cards
+
+_Data touched:_ Rating, User
+
+### Dispute escalation & admin mediation
+_Trigger:_ user taps 'Report' or seller/buyer raises dispute on order
+
+1. Create AdminReport with order/listing/chat context and attached media (payment proof, photos)
+2. Notify ADMIN_CHAT_ID with actionable summary and inline admin controls (Remove listing, Ban user, Mark resolved)
+3. Owner manually resolves: update order/listing state and notify parties
+
+_Data touched:_ AdminReport, Order, Listing, ChatThread
+
+## Owner-supplied settings
+
+The OWNER provides these; they are collected in chat and injected into the environment at deploy. Read each one from the environment where it is used (`ctx.env.<KEY>` / `env.<KEY>` on Cloudflare Workers; `process.env.<KEY>` only as a Node/harness fallback — never the sole read). Do NOT invent your own way of learning the value, do NOT ask for it in a bot message, and do NOT hardcode a default.
+
+- **ADMIN_CHAT_ID** — Telegram chat id where new high-value listings, disputes and reports are sent
+  - this is the OWNER's own chat id; the platform already knows it. Read `ADMIN_CHAT_ID` via `ctx.env` (prefer toolkit `adminChatId` / `requireOwner`) — never ask a user, never treat whoever writes first as the admin, never invent claim-admin or open manage for everyone.
+  - may be UNSET at runtime: the bot must still start, and the feature needing ADMIN_CHAT_ID must say so plainly instead of failing.
+
+Your behavioral specs run WITHOUT these values, so no spec may depend on one.
+
+## Data entities
+
+Durable data (must survive a restart) uses the toolkit's persistent store, never in-memory maps.
+
+An entity that merely NAMES an owner-supplied setting above (an admin chat, an API account) is not something to store or discover — read it from the environment.
+
+- **User** _(retention: persistent)_ — Buyer or seller profile including handles, optional phone, location, reputation and basic settings
+  - fields: user_id (telegram), display_name, username, phone (optional), location (optional), reputation {avg_rating, review_count}, created_at
+- **Listing** _(retention: persistent)_ — Item listing created by seller
+  - fields: listing_id, seller_user_id, title, tags, condition (enum: New|Near Mint|Excellent|Good|Played|Poor), quantity, price_amount, price_currency (BTC|ETH|USDC), photos (array of photo ids), description, shipping_rules, created_at, status (active|removed|sold)
+- **Photo** _(retention: persistent)_ — Image file for listings and messages
+  - fields: photo_id, uploader_user_id, file_id (telegram), thumbnail_reference, uploaded_at
+- **Order** _(retention: persistent)_ — Buy-side commitment and lifecycle for a listing purchase
+  - fields: order_id, listing_id, buyer_user_id, seller_user_id, amount, currency, one_time_payment_address, payment_proofs (array), state (awaiting_payment|paid|shipped|completed|cancelled|disputed), created_at, updated_at
+- **PaymentProof** _(retention: persistent)_ — User-submitted evidence of on-chain transfer (tx hash or screenshot)
+  - fields: proof_id, order_id, uploader_user_id, tx_hash (optional), screenshot_photo_id (optional), submitted_at
+- **ChatThread** _(retention: persistent)_ — Per-order ephemeral messaging between buyer and seller. Stored for dispute resolution.
+  - fields: thread_id, order_id, participant_ids, messages [{sender_id, text, attachments, timestamp}], reported_flags
+- **AdminReport** _(retention: persistent)_ — Moderation report about listing, user or message
+  - fields: report_id, reporter_user_id, target_type (listing|user|message|order), target_id, reason, attachments, status (open|resolved|closed), created_at
+- **Rating** _(retention: persistent)_ — Post-order rating and short review
+  - fields: rating_id, order_id, rater_user_id, rating (1-5), note (optional), created_at
+
+## Integrations
+
+- **Telegram** (required) — Bot API messaging, file/photo storage references and inline keyboards
+Call external APIs against their real contract (correct endpoints, ids, params); credentials from env. Do not fake responses.
+
+## Owner controls
+
+- Set ADMIN_CHAT_ID (required) for admin notifications
+- Remove listing (by listing_id) and ban user (by user_id)
+- Set/adjust high-value threshold that triggers admin notification
+- Enable/disable optional on-chain watch (if owner provides provider credentials)
+- Configure supported crypto list (default BTC, ETH, USDC)
+- Export dispute logs and listing history
+
+## Notifications
+
+- New listing published (to followers or feed)
+- New high-value listing (to ADMIN_CHAT_ID)
+- Order created (to seller)
+- Payment proof uploaded (to seller)
+- Order marked paid/shipped/completed (to buyer and seller)
+- Dispute or report filed (to ADMIN_CHAT_ID)
+- User banned or listing removed (to affected user)
+
+## Permissions & privacy
+
+- Store photos, listing data, chat messages, payment proofs and tx hashes for dispute resolution and moderation
+- Do not ask for or store private keys or wallet seeds
+- No mandatory KYC; phone is optional and stored only if user provides it
+- Admin notifications (reports, disputes) are sent only to ADMIN_CHAT_ID; owner must secure that chat
+- Owners/operators are responsible for handling funds — bot does not custody user funds by default
+
+## Edge cases
+
+- Buyer uploads payment proof that doesn't match provided one-time address or amount (require manual seller/admin verification)
+- Double-spend or unconfirmed transaction — seller may require sufficient confirmations; policy must be in help text
+- Seller disappears after payment (escrow absent) — dispute flow and admin mediation required
+- User uploads malicious or abusive images — report flow and admin removal
+- High-volume spam or bot-created listings — rate-limit listing creation per account and require CAPTCHA or phone step for suspicious activity
+- Partial refunds or split shipments are out-of-scope for automatic resolution; must be handled manually
+- User requests custodial escrow without owner-provided escrow wallet — block or route to missing_fields remediation
+
+## Required tests
+
+- Dialog test: Create listing end-to-end (all required fields, photos up to 6, preview, publish, admin notification if above threshold)
+- Dialog test: Browse flow with filters and pagination, open listing and view gallery
+- Dialog test: Buy-now flow: order creation, delivery of one-time address, upload payment proof, seller verification, shipment, completion and rating
+- Dialog test: Report message -> AdminReport created and notification sent to ADMIN_CHAT_ID; owner takes action and user is notified
+- Persistence test: Restart bot/server and confirm listings, orders, chats and photos remain accessible
+- Security test: Ensure bot never requests or stores private keys or wallet secrets
+
+## Assumptions
+
+- Supported crypto types initially are BTC, ETH and USDC
+- Payments are on-chain only; buyers upload payment proof; on-chain watch is optional and not required for launch
+- Condition enumerations are New, Near Mint, Excellent, Good, Played, Poor
+- Photos limited to 6 per listing to control storage
+- Seller manually verifies payment proof and marks as paid/shipped; admin mediates disputes
+- No automated custody or fiat conversions in initial release
