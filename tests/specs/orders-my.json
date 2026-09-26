@@ -1,0 +1,20 @@
+[
+  {
+    "name": "My orders",
+    "steps": [
+      {
+        "expect": [
+          {
+            "method": "sendMessage",
+            "payload": {
+              "text": "My orders — you're in the right place. What would you like to do next?"
+            }
+          }
+        ],
+        "send": {
+          "callback": "orders:my"
+        }
+      }
+    ]
+  }
+]
