@@ -13,6 +13,7 @@ const WELCOME = "👋 Welcome! Tap a button below to get started.";
 
 composer.command("start", async (ctx) => {
   await ctx.reply(WELCOME, { reply_markup: mainMenuKeyboard() });
+  await ctx.reply("Trade Pokémon cards with clear terms. Payments are on-chain only: never share a private key or wallet recovery phrase. Supported currencies: BTC, ETH and USDC.");
 });
 
 // "Back to menu" — re-render the main menu in place from any sub-view.
