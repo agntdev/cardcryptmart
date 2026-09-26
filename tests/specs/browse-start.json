@@ -1,0 +1,20 @@
+[
+  {
+    "name": "Browse listings",
+    "steps": [
+      {
+        "expect": [
+          {
+            "method": "sendMessage",
+            "payload": {
+              "text": "Browse listings — you're in the right place. What would you like to do next?"
+            }
+          }
+        ],
+        "send": {
+          "callback": "browse:start"
+        }
+      }
+    ]
+  }
+]
